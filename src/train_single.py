@@ -7,8 +7,7 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
-# import methods as md
-import data_reading as dr
+from data_reading_single import FashionDataset
 
 import model_ResNet18 as Rn
 
@@ -20,14 +19,14 @@ lr_decay = 40  # 学习率衰减的周期，表示在多少个 epoch 之后进�
 decay_rate = 0.5  # 学习率衰减的比率，表示每次衰减学习率时乘以的系数
 num_epochs = 5  # 训练的总轮数，表示整个数据集将被用于训练多少次。lr_decay * 3 + 1
 
-# root_path = '../cifar-10-batches-py/'  # 数据集路径
+root_path = '../cifar-10-batches-py/'  # 数据集路径
 file_name1 = "data_batch_1"  # 修改不同的数据集
 file_name2 = "test_batch"  # 测试集
 # 训练损失文件名
 loss_file_name = 'train_loss_epoch' + str(num_epochs) + '_lr' + str(learning_rate) + '_lrdecay' + str(
     lr_decay) + 'b' + str(batch_size)
 # 模型保存路径
-model_save_path_ResNet18 = '../best_model_ResNet18'
+model_save_path_ResNet18 = '../best_model_ResNet18_single'
 model_save_path = ''
 
 # 当前环境是否支持GPU加速
@@ -44,12 +43,10 @@ error = nn.CrossEntropyLoss()
 # ------------------读取创建训练数据集---------------------#
 # 创建一个FashionDataset变量，表示类型是训练集，并转换为Pytorch的张量格式
 # 使用DataLoader类将上一步创建的训练集train_set封装成一个批量生成器，每次从数据集中加载 batch_size 个样本
-# # train_set = md.FashionDataset('train', root_path, file_name1, transform=transforms.ToTensor())
-# train_set = dr.FashionDataset('train', file_name1, transform=transforms.ToTensor())
+# train_set = FashionDataset('train', root_path, file_name1, transform=transforms.ToTensor())
 # train_loader = DataLoader(train_set, batch_size)
-
-# # test_set = md.FashionDataset('test', root_path, file_name2, transform=transforms.ToTensor())
-# test_set = dr.FashionDataset('test', file_name2, transform=transforms.ToTensor())
+#
+# test_set = FashionDataset('test', root_path, file_name2, transform=transforms.ToTensor())
 # test_loader = DataLoader(test_set, batch_size=256, shuffle=False)
 
 # 创建一个FashionDataset变量，表示类型是训练集/测试集，并转换为Pytorch的张量格式
@@ -61,7 +58,7 @@ transform = transforms.Compose([
 ])
 
 # 创建数据集对象
-train_set = dr.FashionDataset(mode="train", file_name=file_name1, transform=transform)
+train_set = FashionDataset('train', root_path, file_name1, transform=transforms.ToTensor())
 # 使用 DataLoader 进行批量加载
 train_loader = DataLoader(
     train_set,
@@ -73,7 +70,7 @@ train_loader = DataLoader(
 )
 
 # 创建数据集对象
-test_set = dr.FashionDataset(mode="test", file_name=file_name2, transform=transform)
+test_set = FashionDataset('test', root_path, file_name2, transform=transforms.ToTensor())
 # 使用 DataLoader 进行批量加载
 test_loader = DataLoader(
     test_set,
@@ -83,6 +80,7 @@ test_loader = DataLoader(
     pin_memory=False,      # 如果使用 GPU，建议设为 True
     prefetch_factor=2      # 预取数据，加快加载
 )
+
 
 # 假设 total_data_size 是你的数据集中的总样本数
 total_data_size = len(train_set)

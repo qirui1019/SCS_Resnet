@@ -1,7 +1,6 @@
 from flask import Flask, jsonify, Response, request, send_file, stream_with_context
 import os
 import tarfile
-import pickle
 
 app = Flask(__name__)
 
