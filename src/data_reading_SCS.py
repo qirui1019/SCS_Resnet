@@ -73,7 +73,6 @@ class FashionDataset(Dataset):
         # if self.transform is not None:
         #     image = self.transform(image)
         # return image, label
-
         image, label = self.images[index], self.labels[index]
 
         if self.transform:

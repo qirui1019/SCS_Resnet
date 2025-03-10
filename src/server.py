@@ -44,7 +44,7 @@ def generate_large_file(file_path, chunk_size=8192):
 @app.route("/datasets/<path:filename>", methods=["GET"])
 def download_file(filename):
     """ 通过 HTTP 以流式方式提供文件访问 """
-    # print(f"Received request for file: {filename}")  # 打印日志，看看是否有请求到达
+    print(f"Received request for file: {filename}")  # 打印日志，看看是否有请求到达
     file_path = os.path.join(EXTRACTED_FOLDER, filename)
     # print(f"Full path to requested file: {file_path}")  # 检查拼接后的路径是否正确
     if not os.path.exists(file_path):
