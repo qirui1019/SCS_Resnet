@@ -8,7 +8,9 @@ from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 
 # 存储服务器的 URL
-STORAGE_SERVER = "http://127.0.0.1:5000"
+# STORAGE_SERVER = "http://127.0.0.1:5000"
+STORAGE_SERVER = "http://10.27.251.68:5000"  # 修改为主机的实际 IP
+
 
 
 def unpickle_from_http(file_url, max_retries=3, chunk_size=8192):
@@ -86,7 +88,6 @@ class FashionDataset(Dataset):
         # return len(images)
 
         return len(self.images)  # 直接返回长度，不用每次请求服务器
-
 
 
 
