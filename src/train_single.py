@@ -11,13 +11,17 @@ from data_reading_single import FashionDataset
 
 import model_ResNet18 as Rn
 
+import time
+
+from torch.utils.tensorboard import SummaryWriter
+
 # --------------------超参定义---------------------#
-batch_size = 256  # 批量大小，每次输入的样本数量
-learning_rate = 0  # 学习率,每次学习的更新幅度，学习率过大训练速度会更快，但结果可能不大稳定
-use_lr_decay = 0  # 是否使用学习率衰减，是一种在训练过程中逐渐降低学习率的技术，帮助模型更好地收敛到最优解
-lr_decay = 40  # 学习率衰减的周期，表示在多少个 epoch 之后进行一次学习率衰减
+batch_size = 128  # 批量大小，每次输入的样本数量
+learning_rate = 0.0001  # 学习率,每次学习的更新幅度，学习率过大训练速度会更快，但结果可能不大稳定
+use_lr_decay = 1  # 是否使用学习率衰减，是一种在训练过程中逐渐降低学习率的技术，帮助模型更好地收敛到最优解
+lr_decay = 15  # 学习率衰减的周期，表示在多少个 epoch 之后进行一次学习率衰减
 decay_rate = 0.5  # 学习率衰减的比率，表示每次衰减学习率时乘以的系数
-num_epochs = 5  # 训练的总轮数，表示整个数据集将被用于训练多少次。lr_decay * 3 + 1
+num_epochs = 50  # 训练的总轮数，表示整个数据集将被用于训练多少次。lr_decay * 3 + 1
 
 root_path = '../cifar-10-batches-py/'  # 数据集路径
 file_name1 = "data_batch_1"  # 修改不同的数据集
@@ -62,9 +66,9 @@ train_set = FashionDataset('train', root_path, file_name1, transform=transforms.
 # 使用 DataLoader 进行批量加载
 train_loader = DataLoader(
     train_set,
-    batch_size=256,        # 每次训练加载 256 张
+    batch_size=128,        # 每次训练加载 256 张
     shuffle=True,          # 每个 epoch 重新打乱数据,提高模型泛化能力
-    num_workers=3,         # 使用 3个 CPU 线程加载数据
+    num_workers=2,         # 使用 2个 CPU 线程加载数据
     pin_memory=False,      # 如果使用 GPU，建议设为 True
     prefetch_factor=2      # 预取数据，加快加载
 )
@@ -74,9 +78,9 @@ test_set = FashionDataset('test', root_path, file_name2, transform=transforms.To
 # 使用 DataLoader 进行批量加载
 test_loader = DataLoader(
     test_set,
-    batch_size=256,        # 每次训练加载 256 张
+    batch_size=128,        # 每次训练加载 256 张
     shuffle=False,         # 每个 epoch 重新打乱数据,提高模型泛化能力
-    num_workers=3,         # 使用 3个 CPU 线程加载数据
+    num_workers=2,         # 使用 2个 CPU 线程加载数据
     pin_memory=False,      # 如果使用 GPU，建议设为 True
     prefetch_factor=2      # 预取数据，加快加载
 )
@@ -131,6 +135,16 @@ def exp_lr_scheduler(optimizer, epoch, decay_rate, init_lr, lr_decay):
 
 
 def train(new_learning_rate, my_model, use_lr_decay, lr_decay, decay_rate, num_epochs):
+    graph_path = "../graph/single_resnet"
+    # 获取当前时间
+    current_time = time.localtime()
+    formatted_time = time.strftime("%Y-%m-%d_%H-%M-%S", current_time)
+    log_dir = os.path.join(graph_path, formatted_time)
+    writer = SummaryWriter(log_dir=log_dir)
+    # 记录模型结构
+    dummy_input = torch.randn(1, 3, 32, 32).to(device)
+    writer.add_graph(model, dummy_input)
+
     global total_loss
     # 定义一个Adam优化器，用于更新模型参数以最小化损失函数
     optimizer = torch.optim.Adam(my_model.parameters(), lr=new_learning_rate)  # 函数用于返回模型的所有可训练参数，lr决定了每次参数更新的步长
@@ -195,10 +209,16 @@ def train(new_learning_rate, my_model, use_lr_decay, lr_decay, decay_rate, num_e
         avg_loss_per_epoch.append(epoch_loss)
         avg_precision_per_epoch.append(epoch_accuracy)
 
+        writer.add_scalar("Loss/train", epoch_loss, epoch)
+        writer.add_scalar("Accuracy/train",  epoch_accuracy, epoch)
+
         # 用于打印每个训练周期的训练信息，包及括该epoch的loss和precision
         print(f'Epoch {epoch}: Avg Loss: {epoch_loss:.4f}, Avg Precision: {epoch_accuracy:.4f}')
 
         test_accuracy = evaluate_model(my_model, device, test_loader)
+
+        writer.add_scalar("Accuracy/test", test_accuracy, epoch)
+
         model_path = os.path.join(model_save_path,
                                   f'lr_{new_learning_rate}_use_lr_decay{use_lr_decay}_lrdecay_{lr_decay}_decay_rate{decay_rate}_bsize{batch_size}_num_epochs{num_epochs}.pth')
 
@@ -215,7 +235,8 @@ def train(new_learning_rate, my_model, use_lr_decay, lr_decay, decay_rate, num_e
     # 保存每个学习率下的损失和精度数据，便于后续可视化
     loss_data[new_learning_rate] = avg_loss_per_epoch
     precision_data[new_learning_rate] = avg_precision_per_epoch
-    # md.draw(avg_loss_per_epoch, avg_precision_per_epoch, num_epochs, learning_rate, lr_decay)
+
+    writer.close()
 
 
 # -----------------------实现多组超参同时训练--------------------------#
@@ -237,7 +258,7 @@ def train(new_learning_rate, my_model, use_lr_decay, lr_decay, decay_rate, num_e
 
 # 开学习率
 if __name__ == '__main__':
-    learning_rates = [0.001,0.0005]
+    learning_rates = [0.0001]
     use_lr_decay = [1]
     lr_decays = [15]
     decay_rates = [0.5]

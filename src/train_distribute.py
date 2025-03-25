@@ -9,11 +9,19 @@ from torch.utils.data import DataLoader, DistributedSampler
 from data_reading_SCS import FashionDataset
 import model_ResNet18 as Rn
 
-import torch.optim.lr_scheduler as lr_scheduler  # 导入学习率调度器模块
+import torch.optim.lr_scheduler as lr_scheduler
+
+from torch.utils.tensorboard import SummaryWriter
+import time
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 
 # --------------------超参数搜索空间---------------------#
-batch_sizes = [128, 256]
-learning_rates = [0.001, 0.0001]
+batch_sizes = [128]
+learning_rates = [0.0001]
 lr_decays = [15]
 decay_rates = [0.5]
 num_epochs_list = [50]  # 不同超参数组合的训练轮数
@@ -21,8 +29,8 @@ num_epochs_list = [50]  # 不同超参数组合的训练轮数
 # 生成所有超参数组合
 param_combinations = list(itertools.product(batch_sizes, learning_rates, lr_decays, decay_rates, num_epochs_list))
 
-file_name1 = "data_batch_1"
-file_name2 = "test_batch"
+# file_name1 = "data_batch_1"
+# file_name2 = "test_batch"
 
 model_save_path_ResNet18 = '../best_model_ResNet18_SCS'
 model_save_path = model_save_path_ResNet18
@@ -30,6 +38,7 @@ model_save_path = model_save_path_ResNet18
 # 检查模型保存路径是否存在
 if not os.path.exists(model_save_path):
     os.makedirs(model_save_path)  # 如果模型保存路径不存在，则创建
+
 
 # -----------------分布式训练设置-----------------#
 def setup():
@@ -76,17 +85,27 @@ def train():
         print(f"[Rank {rank}] Training with batch_size={batch_size}, lr={learning_rate}, "
               f"lr_decay={lr_decay}, decay_rate={decay_rate}, epochs={num_epochs}")
 
+        # 创建一个全局 requests.Session 并设置连接池大小
+        session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100,
+                                                max_retries=Retry(total=3, backoff_factor=0.1))  # 连接池大小 10
+        session.mount("http://", adapter)
+
         # 训练数据集
-        train_set = FashionDataset(mode="train", file_name=file_name1, transform=transform)
-        # 为了能够按顺序划分数据子集，拿到不同部分数据，所以数据集不能够进行随机打散，所以用了参数 'shuffle': False
-        train_sampler = DistributedSampler(train_set, num_replicas=world_size, rank=rank, shuffle=False)
-        train_loader = DataLoader(train_set, batch_size=batch_size, num_workers=2, prefetch_factor=1,
+        # train_set = FashionDataset(mode="train", file_name=file_name1, transform=transform)
+        train_set = FashionDataset(mode="train", total_samples=50000, transform=transform, session=session)
+        # 为了能够按顺序划分数据子集，拿到不同部分数据，所以数据集不能够进行随机打散，所以DataLoader用参数 'shuffle': False
+        # 而在为了在每个 epoch 随机重新分配数据，避免不同 rank 之间的数据模式固定，提高泛化能力 DistributedSampler 用参数 'shuffle': True
+        train_sampler = DistributedSampler(train_set, num_replicas=world_size, rank=rank, shuffle=True)
+        train_loader = DataLoader(train_set, batch_size=batch_size, num_workers=1, prefetch_factor=2,
                                   pin_memory=False, sampler=train_sampler)
 
         # 测试数据集
-        test_set = FashionDataset(mode="test", file_name=file_name2, transform=transform)
+        # test_set = FashionDataset(mode="test", file_name=file_name2, transform=transform)
+        test_set = FashionDataset(mode="test", total_samples=10000, transform=transform, session=session)
+        # 设定 shuffle=False 保证 每次评估时数据顺序相同，确保实验的可复现性
         test_sampler = DistributedSampler(test_set, num_replicas=world_size, rank=rank, shuffle=False)
-        test_loader = DataLoader(test_set, batch_size=batch_size, num_workers=2, prefetch_factor=1,
+        test_loader = DataLoader(test_set, batch_size=batch_size, num_workers=1, prefetch_factor=2,
                                  pin_memory=False, sampler=test_sampler)
 
         # 初始化模型
@@ -99,6 +118,21 @@ def train():
 
         # 添加学习率调度器
         scheduler = lr_scheduler.StepLR(optimizer, step_size=lr_decay, gamma=decay_rate)
+
+        # 仅在 rank == 0 时初始化 TensorBoard
+        if rank == 0:
+            graph_path = "../graph/distributed_resnet"
+            # 获取当前时间
+            current_time = time.localtime()
+            formatted_time = time.strftime("%Y-%m-%d_%H-%M-%S", current_time)
+            log_dir = os.path.join(graph_path, formatted_time)
+            writer = SummaryWriter(log_dir=log_dir)
+            # 记录模型结构
+            dummy_input = torch.randn(1, 3, 32, 32).to(device)
+            writer.add_graph(model.module, dummy_input)  # 实际的模型位于 model.module
+
+        # 确保所有进程在继续前同步
+        dist.barrier()
 
         # 训练循环
         best_accuracy = 0.0
@@ -132,6 +166,18 @@ def train():
             current_lr = optimizer.param_groups[0]['lr']
             print(f"[Rank {rank}] Learning rate after epoch {epoch}: {current_lr}")
 
+            # 使用 all_reduce 汇总训练 loss 和 accuracy
+            loss_tensor = torch.tensor(epoch_loss, dtype=torch.float32, device=device)
+            accuracy_tensor = torch.tensor(epoch_accuracy, dtype=torch.float32, device=device)
+            dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(accuracy_tensor, op=dist.ReduceOp.SUM)
+
+            if rank == 0:
+                avg_epoch_loss = loss_tensor.item() / world_size
+                avg_epoch_accuracy = accuracy_tensor.item() / world_size
+                writer.add_scalar("Loss/train", avg_epoch_loss, epoch)
+                writer.add_scalar("Accuracy/train", avg_epoch_accuracy, epoch)
+
             # 评估模型
             model.eval()
             correct_test, total_test = 0, 0
@@ -153,6 +199,8 @@ def train():
                 final_test_accuracy = correct_test_tensor.item() / total_test_tensor.item()
                 print(f"[Rank 0] Final Test Accuracy after epoch {epoch}: {final_test_accuracy:.4f}")
 
+                writer.add_scalar("Accuracy/test", final_test_accuracy, epoch)
+
                 # 只有 rank 0 负责保存模型
                 if final_test_accuracy > best_accuracy:
                     best_accuracy = final_test_accuracy
@@ -163,9 +211,12 @@ def train():
                     torch.save(model.state_dict(), model_path)
                     print(f"[Rank {rank}] New best model saved with accuracy: {best_accuracy:.4f}")
 
-        # 同步等待所有进程完成当前超参数训练
-        dist.barrier()
+            # 同步等待所有进程完成当前超参数训练
+            dist.barrier()
         print(f"[Rank {rank}] Finished training for parameter set {param_id}")
+
+        if rank == 0:
+            writer.close()
 
     cleanup()  # 训练结束，清理分布式进程
 

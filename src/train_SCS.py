@@ -49,25 +49,25 @@ transform = transforms.Compose([
 ])
 
 # 创建数据集对象
-train_set = FashionDataset(mode="train", file_name=file_name1, transform=transform)
+train_set = FashionDataset(mode="train", total_samples=50000, transform=transform)
 # 使用 DataLoader 进行批量加载
 train_loader = DataLoader(
     train_set,
-    batch_size=256,        # 每次训练加载 256 张
+    batch_size=128,        # 每次训练加载 256 张
     shuffle=True,          # 每个 epoch 重新打乱数据,提高模型泛化能力
-    num_workers=3,         # 使用 3个 CPU 线程加载数据
+    num_workers=1,         # 使用 3个 CPU 线程加载数据
     pin_memory=False,      # 如果使用 GPU，建议设为 True
     prefetch_factor=2      # 预取数据，加快加载
 )
 
 # 创建数据集对象
-test_set = FashionDataset(mode="test", file_name=file_name2, transform=transform)
+test_set = FashionDataset(mode="test", total_samples=10000, transform=transform)
 # 使用 DataLoader 进行批量加载
 test_loader = DataLoader(
     test_set,
-    batch_size=256,        # 每次训练加载 256 张
+    batch_size=128,        # 每次训练加载 256 张
     shuffle=False,         # 每个 epoch 重新打乱数据,提高模型泛化能力
-    num_workers=3,         # 使用 3个 CPU 线程加载数据
+    num_workers=1,         # 使用 3个 CPU 线程加载数据
     pin_memory=False,      # 如果使用 GPU，建议设为 True
     prefetch_factor=2      # 预取数据，加快加载
 )
@@ -227,7 +227,7 @@ def train(new_learning_rate, my_model, use_lr_decay, lr_decay, decay_rate, num_e
 
 # 开学习率
 if __name__ == '__main__':
-    learning_rates = [0.001,0.0005]
+    learning_rates = [0.001]
     use_lr_decay = [1]
     lr_decays = [15]
     decay_rates = [0.5]
