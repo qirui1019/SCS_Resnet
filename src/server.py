@@ -90,7 +90,6 @@ def stream_image(mode, image_id):
     last_request_time = time.time()  # 更新最后请求时间
 
     global data_transferred, last_report_time, transfer_rate
-    last_report_time = time.time()
 
     global server_active
     if not server_active:
@@ -119,7 +118,7 @@ def stream_image(mode, image_id):
 
     # 监控数据传输速率，每秒输出一次
     current_time = time.time()
-    if current_time - last_report_time >= 1:  # 每秒输出一次
+    if current_time - last_report_time >= 1:
         transfer_rate = data_transferred / (current_time - last_report_time) / 1024  # KB/s
         # # 使用 logging 记录数据传输速率
         # logging.info(f"数据传输速率: {transfer_rate:.2f} KB/s")
@@ -132,19 +131,12 @@ def stream_image(mode, image_id):
     return response
 
 
-@app.route("/transfer_rate", methods=["GET"])
-def get_transfer_rate():
-    """ 提供当前数据传输速率，供客户端查询 """
-    response = jsonify({"transfer_rate": f"{transfer_rate:.2f} KB/s"})
-    response.headers["Connection"] = "keep-alive"
-    return response
-
-
 @app.route("/datasets/<mode>/<int:image_id>/info", methods=["GET"])
 def get_label(mode, image_id):
     """ 根据索引返回标签信息 """
     global last_request_time
     last_request_time = time.time()  # 更新最后请求时间
+    global data_transferred, last_report_time, transfer_rate
 
     if mode not in ["train", "test"]:
         return jsonify({"error": "Invalid mode, must be 'train' or 'test'"}), 40
@@ -157,7 +149,27 @@ def get_label(mode, image_id):
     if label is None:
         return jsonify({"error": "Label not found"}), 404
 
-    response = jsonify({"label": label})
+        # 计算 JSON 响应的大小
+    response_data = jsonify({"label": label})
+    json_size = len(response_data.get_data())  # 获取 JSON 的字节数
+    data_transferred += json_size  # 统计传输量
+
+    # 监控数据传输速率
+    current_time = time.time()
+    if current_time - last_report_time >= 1:
+        transfer_rate = data_transferred / (current_time - last_report_time) / 1024  # KB/s
+        data_transferred = 0  # 重置统计
+        last_report_time = current_time
+
+    response = response_data
+    response.headers["Connection"] = "keep-alive"
+    return response
+
+
+@app.route("/transfer_rate", methods=["GET"])
+def get_transfer_rate():
+    """ 提供当前数据传输速率，供客户端查询 """
+    response = jsonify({"transfer_rate": f"{transfer_rate:.2f} KB/s"})
     response.headers["Connection"] = "keep-alive"
     return response
 

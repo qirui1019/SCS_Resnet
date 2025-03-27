@@ -18,11 +18,6 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from transfer_rate import TransferRate
-
-import tkinter as tk
-import threading
-
 
 # --------------------超参数搜索空间---------------------#
 batch_sizes = [128]
@@ -91,7 +86,7 @@ def train():
         # 创建一个全局 requests.Session 并设置连接池大小
         session = requests.Session()
         adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100,
-                                                max_retries=Retry(total=3, backoff_factor=0.1))  # 连接池大小 10
+                                                max_retries=Retry(total=3, backoff_factor=0.1))  # 连接池大小 100
         session.mount("http://", adapter)
 
         # 训练数据集
@@ -258,25 +253,6 @@ def train():
     cleanup()  # 训练结束，清理分布式进程
 
 
-# ------------------数据传输速率------------------#
-# def train_with_transfer_rate_monitor():
-#     """ 训练过程中启动实时监控数据传输速率的窗口 """
-#     # 创建 Tkinter 窗口
-#     root = tk.Tk()
-#     app = TransferRate(root)
-#
-#     # 启动训练的线程，避免阻塞 Tkinter 主线程
-#     training_thread = threading.Thread(target=train, daemon=True)
-#     training_thread.start()
-#
-#     app.update_transfer_rate
-#
-#     # 启动 Tkinter 窗口主循环
-#     root.protocol("WM_DELETE_WINDOW", app.on_close)  # 确保关闭窗口时退出线程
-#     root.mainloop()  # Tkinter 主线程
-
-
 # ------------------分布式启动入口------------------#
 if __name__ == '__main__':
     train()
-    # train_with_transfer_rate_monitor()
