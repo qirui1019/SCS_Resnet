@@ -18,6 +18,11 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from transfer_rate import TransferRate
+
+import tkinter as tk
+import threading
+
 
 # --------------------超参数搜索空间---------------------#
 batch_sizes = [128]
@@ -29,15 +34,13 @@ num_epochs_list = [50]  # 不同超参数组合的训练轮数
 # 生成所有超参数组合
 param_combinations = list(itertools.product(batch_sizes, learning_rates, lr_decays, decay_rates, num_epochs_list))
 
-# file_name1 = "data_batch_1"
-# file_name2 = "test_batch"
 
-model_save_path_ResNet18 = '../best_model_ResNet18_SCS'
+model_save_path_ResNet18 = '../best_model_ResNet18_distribute'
 model_save_path = model_save_path_ResNet18
 
 # 检查模型保存路径是否存在
 if not os.path.exists(model_save_path):
-    os.makedirs(model_save_path)  # 如果模型保存路径不存在，则创建
+    os.makedirs(model_save_path,)  # 如果模型保存路径不存在，则创建
 
 
 # -----------------分布式训练设置-----------------#
@@ -114,6 +117,7 @@ def train():
 
         # 损失函数和优化器
         criterion = nn.CrossEntropyLoss()
+        loss_fn = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
         # 添加学习率调度器
@@ -137,6 +141,8 @@ def train():
         # 训练循环
         best_accuracy = 0.0
         for epoch in range(1, num_epochs + 1):
+            start_epoch_time = time.time()  # 记录每个epoch开始的时间
+
             train_sampler.set_epoch(epoch)  # 让不同进程加载不同数据
             test_sampler.set_epoch(epoch)  # 让测试数据在不同 epoch 也分布式处理
             model.train()
@@ -145,6 +151,10 @@ def train():
 
             for images, labels in train_loader:
                 images, labels = images.to(device), labels.to(device)
+
+                # 计算数据大小（MB）
+                batch_data_size = images.element_size() * images.nelement() + labels.element_size() * labels.nelement()
+                batch_data_size /= 1024 * 1024  # 转换为 MB
 
                 optimizer.zero_grad()
                 outputs = model(images)
@@ -161,6 +171,19 @@ def train():
             epoch_accuracy = correct / total
             print(f"[Rank {rank}] Epoch {epoch}: Loss: {epoch_loss:.4f}, Accuracy: {epoch_accuracy:.4f}")
 
+            # 记录每个epoch的训练时间
+            end_epoch_time = time.time()
+            epoch_time = end_epoch_time - start_epoch_time
+
+            # 使用 all_reduce 取所有进程中的最大值
+            epoch_time_tensor = torch.tensor(epoch_time, dtype=torch.float32, device=device)
+            dist.all_reduce(epoch_time_tensor, op=dist.ReduceOp.MAX)
+
+            # 仅 rank == 0 进程记录最终训练时间
+            if rank == 0:
+                final_epoch_time = epoch_time_tensor.item()
+                writer.add_scalar("Time/Train/distribute", final_epoch_time, epoch)
+
             # 更新学习率
             scheduler.step()  # 在每个 epoch 结束时调整学习率
             current_lr = optimizer.param_groups[0]['lr']
@@ -175,31 +198,43 @@ def train():
             if rank == 0:
                 avg_epoch_loss = loss_tensor.item() / world_size
                 avg_epoch_accuracy = accuracy_tensor.item() / world_size
-                writer.add_scalar("Loss/train", avg_epoch_loss, epoch)
-                writer.add_scalar("Accuracy/train", avg_epoch_accuracy, epoch)
+                writer.add_scalar("Loss/train/distribute", avg_epoch_loss, epoch)
+                writer.add_scalar("Accuracy/train/distribute", avg_epoch_accuracy, epoch)
 
             # 评估模型
             model.eval()
             correct_test, total_test = 0, 0
+            test_loss_sum = 0.0  # 新增：累计 loss
             with torch.no_grad():  # 关闭反向传播
                 for images, labels in test_loader:
                     images, labels = images.to(device), labels.to(device)
                     outputs = model(images)
+
+                    loss = loss_fn(outputs, labels)  # 计算 loss
+
                     _, predicted = torch.max(outputs, 1)
                     correct_test += (predicted == labels).sum().item()
                     total_test += labels.size(0)
 
+                    # 累计 loss 计数
+                    test_loss_sum += loss.item()
+
             # 使用 all_reduce 汇总测试结果
             correct_test_tensor = torch.tensor(correct_test, dtype=torch.float32, device=device)
             total_test_tensor = torch.tensor(total_test, dtype=torch.float32, device=device)
+            test_loss_sum_tensor = torch.tensor(test_loss_sum, dtype=torch.float32, device=device)
+
             dist.all_reduce(correct_test_tensor, op=dist.ReduceOp.SUM)
             dist.all_reduce(total_test_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(test_loss_sum_tensor, op=dist.ReduceOp.SUM)
 
             if rank == 0:
                 final_test_accuracy = correct_test_tensor.item() / total_test_tensor.item()
+                final_test_loss = test_loss_sum_tensor.item() / world_size
                 print(f"[Rank 0] Final Test Accuracy after epoch {epoch}: {final_test_accuracy:.4f}")
 
-                writer.add_scalar("Accuracy/test", final_test_accuracy, epoch)
+                writer.add_scalar("Accuracy/test/distribute", final_test_accuracy, epoch)
+                writer.add_scalar("Loss/test/distribute", final_test_loss, epoch)
 
                 # 只有 rank 0 负责保存模型
                 if final_test_accuracy > best_accuracy:
@@ -218,9 +253,30 @@ def train():
         if rank == 0:
             writer.close()
 
+        session.close()  # 释放session
+
     cleanup()  # 训练结束，清理分布式进程
+
+
+# ------------------数据传输速率------------------#
+# def train_with_transfer_rate_monitor():
+#     """ 训练过程中启动实时监控数据传输速率的窗口 """
+#     # 创建 Tkinter 窗口
+#     root = tk.Tk()
+#     app = TransferRate(root)
+#
+#     # 启动训练的线程，避免阻塞 Tkinter 主线程
+#     training_thread = threading.Thread(target=train, daemon=True)
+#     training_thread.start()
+#
+#     app.update_transfer_rate
+#
+#     # 启动 Tkinter 窗口主循环
+#     root.protocol("WM_DELETE_WINDOW", app.on_close)  # 确保关闭窗口时退出线程
+#     root.mainloop()  # Tkinter 主线程
 
 
 # ------------------分布式启动入口------------------#
 if __name__ == '__main__':
     train()
+    # train_with_transfer_rate_monitor()

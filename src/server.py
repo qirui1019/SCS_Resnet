@@ -5,10 +5,17 @@ import io
 from PIL import Image
 import tarfile
 from gevent.pywsgi import WSGIServer
+import time
+import threading
+import logging
+
+# # 设置日志配置
+# LOG_FILE = "../data_transfer.log"
+# logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format="%(asctime)s - %(message)s")
+
 
 app = Flask(__name__)
 
-# CIFAR10_LABELS = ["airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"]
 
 # 定义数据集存储文件夹
 DATASET_FOLDER = os.path.join(os.path.abspath(os.sep), "datasets")  # 在计算机根目录下创建
@@ -17,6 +24,14 @@ os.makedirs(DATASET_FOLDER, exist_ok=True)  # 确保文件夹存在,无则创建
 # 数据集压缩文件
 DATASET_ARCHIVE = os.path.join(DATASET_FOLDER, "cifar-10-python.tar.gz")
 EXTRACTED_FOLDER = os.path.join(DATASET_FOLDER, "cifar-10-batches-py")
+
+last_request_time = time.time()  # 模拟的数据请求计时器，用于检查请求状态
+data_transferred = 0  # 用于记录传输的数据量
+last_report_time = time.time()  # 用于监控请求超时
+transfer_rate = 0  # 新增：数据传输速率（KB/s）
+
+# 服务器激活标志
+server_active = True
 
 
 def extract_dataset():
@@ -71,6 +86,17 @@ def get_image_from_batch(batch_file, index):
 @app.route("/datasets/<mode>/<int:image_id>", methods=["GET"])
 def stream_image(mode, image_id):
     """ 根据索引 image_id 返回图片流"""
+    global last_request_time
+    last_request_time = time.time()  # 更新最后请求时间
+
+    global data_transferred, last_report_time, transfer_rate
+    last_report_time = time.time()
+
+    global server_active
+    if not server_active:
+        # 服务器处于休眠状态，重置标志为激活
+        server_active = True
+
     if mode not in ["train", "test"]:
         return jsonify({"error": "Invalid mode, must be 'train' or 'test'"}), 400
 
@@ -87,14 +113,39 @@ def stream_image(mode, image_id):
     img.save(img_io, format="JPEG", quality=85)  # 压缩为 JPEG
     img_io.seek(0)
 
+    # 计算图像大小并更新传输数据量
+    image_size = len(img_io.getvalue())  # 获取字节数
+    data_transferred += image_size
+
+    # 监控数据传输速率，每秒输出一次
+    current_time = time.time()
+    if current_time - last_report_time >= 1:  # 每秒输出一次
+        transfer_rate = data_transferred / (current_time - last_report_time) / 1024  # KB/s
+        # # 使用 logging 记录数据传输速率
+        # logging.info(f"数据传输速率: {transfer_rate:.2f} KB/s")
+        # 重置统计
+        data_transferred = 0
+        last_report_time = current_time
+
     response = send_file(img_io, mimetype="image/jpeg", as_attachment=False)
     response.headers["Connection"] = "keep-alive"  # 允许持久连接
+    return response
+
+
+@app.route("/transfer_rate", methods=["GET"])
+def get_transfer_rate():
+    """ 提供当前数据传输速率，供客户端查询 """
+    response = jsonify({"transfer_rate": f"{transfer_rate:.2f} KB/s"})
+    response.headers["Connection"] = "keep-alive"
     return response
 
 
 @app.route("/datasets/<mode>/<int:image_id>/info", methods=["GET"])
 def get_label(mode, image_id):
     """ 根据索引返回标签信息 """
+    global last_request_time
+    last_request_time = time.time()  # 更新最后请求时间
+
     if mode not in ["train", "test"]:
         return jsonify({"error": "Invalid mode, must be 'train' or 'test'"}), 40
 
@@ -111,59 +162,23 @@ def get_label(mode, image_id):
     return response
 
 
+def check_request_timeout():
+    """ 检查是否超过一段时间没有请求，触发日志记录或其他操作 """
+    global last_request_time, server_active
+    while True:
+        time.sleep(60)  # 每 60s 检查一次
+        current_time = time.time()
+        if current_time - last_request_time > 60 and server_active:
+            server_active = False  # 标记服务器为休眠状态
+
+
 if __name__ == "__main__":
-    # app.run(host="0.0.0.0", port=5000, threaded=True)
+    # 启动超时检查线程
+    timeout_thread = threading.Thread(target=check_request_timeout, daemon=True)
+    timeout_thread.start()
+
+    # 使用 Gevent 启动 WSGI 服务器
     http_server = WSGIServer(("0.0.0.0", 5000), app)
-    http_server.serve_forever()  # 使用 Gevent 启动 WSGI 服务器
+    http_server.serve_forever()
 
 
-
-# from flask import Flask, jsonify, Response, request, send_file, stream_with_context
-# import os
-# import tarfile
-#
-# app = Flask(__name__)
-#
-# # 定义数据集存储文件夹
-# DATASET_FOLDER = os.path.join(os.path.abspath(os.sep), "datasets")  # 在计算机根目录下创建
-# os.makedirs(DATASET_FOLDER, exist_ok=True)  # 确保文件夹存在,无则创建
-#
-# # 数据集压缩文件
-# DATASET_ARCHIVE = os.path.join(DATASET_FOLDER, "cifar-10-python.tar.gz")
-# EXTRACTED_FOLDER = os.path.join(DATASET_FOLDER, "cifar-10-batches-py")
-#
-#
-# def extract_dataset():
-#     """ 仅当数据集未解压时解压 """
-#     if not os.path.exists(EXTRACTED_FOLDER):
-#         print("解压数据集...")
-#         try:
-#             with tarfile.open(DATASET_ARCHIVE, "r:gz") as tar:
-#                 tar.extractall(DATASET_FOLDER)
-#             print("数据集解压完成！")
-#         except Exception as e:
-#             print(f"解压失败: {e}")
-#     else:
-#         print("数据集已解压，无需重复解压。")
-#
-#
-# @app.route("/list", methods=["GET"])
-# def list_files():
-#     """ 列出数据集文件 """
-#     return jsonify(os.listdir(EXTRACTED_FOLDER))
-#
-#
-# @app.route("/datasets/<path:filename>", methods=["GET"])
-# def download_file(filename):
-#     """ 以流式方式提供文件 """
-#     file_path = os.path.join(EXTRACTED_FOLDER, filename)
-#     if not os.path.exists(file_path):
-#         return jsonify({"error": "File not found"}), 404
-#
-#     return Response(stream_with_context(open(file_path, "rb")), content_type="application/octet-stream")
-#
-#
-# if __name__ == "__main__":
-#     extract_dataset()
-#     app.run(host="0.0.0.0", port=5000)
-#
