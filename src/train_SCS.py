@@ -12,9 +12,12 @@ import model_ResNet18 as Rn
 
 import time
 from torch.utils.tensorboard import SummaryWriter
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # --------------------超参定义---------------------#
-batch_size = 256  # 批量大小，每次输入的样本数量
+batch_size = 128  # 批量大小，每次输入的样本数量
 learning_rate = 0  # 学习率,每次学习的更新幅度，学习率过大训练速度会更快，但结果可能不大稳定
 use_lr_decay = 0  # 是否使用学习率衰减，是一种在训练过程中逐渐降低学习率的技术，帮助模型更好地收敛到最优解
 lr_decay = 40  # 学习率衰减的周期，表示在多少个 epoch 之后进行一次学习率衰减
@@ -36,6 +39,11 @@ cuda = True if torch.cuda.is_available() else False
 error = nn.CrossEntropyLoss()
 
 # ------------------读取创建训练数据集---------------------#
+# 创建一个全局 requests.Session 并设置连接池大小
+session = requests.Session()
+adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100,
+                                        max_retries=Retry(total=3, backoff_factor=0.1))  # 连接池大小 100
+session.mount("http://", adapter)
 # 定义数据增强
 transform = transforms.Compose([
     transforms.ToTensor(),
@@ -43,7 +51,7 @@ transform = transforms.Compose([
 ])
 
 # 创建数据集对象
-train_set = FashionDataset(mode="train", total_samples=50000, transform=transform)
+train_set = FashionDataset(mode="train", total_samples=50000, transform=transform, session=session)
 # 使用 DataLoader 进行批量加载
 train_loader = DataLoader(
     train_set,
@@ -54,7 +62,7 @@ train_loader = DataLoader(
     prefetch_factor=2      # 预取数据，加快加载
 )
 
-test_set = FashionDataset(mode="test", total_samples=10000, transform=transform)
+test_set = FashionDataset(mode="test", total_samples=10000, transform=transform, session=session)
 test_loader = DataLoader(
     test_set,
     batch_size=128,
@@ -209,7 +217,7 @@ def train(new_learning_rate, my_model, use_lr_decay, lr_decay, decay_rate, num_e
 
 
 if __name__ == '__main__':
-    learning_rates = [0.001]
+    learning_rates = [0.0005]
     use_lr_decay = [1]
     lr_decays = [15]
     decay_rates = [0.5]
