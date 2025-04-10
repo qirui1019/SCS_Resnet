@@ -1,0 +1,62 @@
+<! DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Training Dashboard</title>
+    <script>
+        async function startTraining() {
+            const epochs = document.getElementById('epochs').value;
+            const mode = document.getElementById('mode').value;
+            const response = await fetch('http://localhost:5001/start', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                      epochs: parseInt(epochs),
+                      mode: mode
+                      })
+            });
+            const data = await response.json();
+            alert(data.status);
+        }
+
+        async function stopTraining() {
+            const response = await fetch('http://localhost:5001/stop', {
+                method: 'POST'
+            });
+            const data = await response.json();
+            alert(data.status);
+        }
+
+        async function getStatus() {
+            const response = await fetch('http://localhost:5001/status');
+            const data = await response.json();
+            document.getElementById('status').innerText =
+    `Training: ${data.is_training} | Epoch: ${data.epoch} / ${data.max_epoch}`;
+        }
+
+        setInterval(getStatus, 1000);
+    </script>
+</head>
+<body>
+    <h1>Training Dashboard</h1>
+
+        <label for="mode">Mode:</label>
+    <select id="mode">
+        <option value="local_train">Local Training</option>
+        <option value="distributed_train">Distributed Training</option>
+    </select>
+
+    <label for="epochs">Epochs:</label>
+    <input type="number" id="epochs" value="10">
+    <button onclick="startTraining()">Start Training</button>
+    <button onclick="stopTraining()">Stop Training</button>
+    <h2>Status:</h2>
+    <pre id="status"style="font-size: 18px;"></pre>
+
+    <h2>TensorBoard</h2>
+    <iframe src="http://localhost:6006" width="100%" height="600px"></iframe>
+</body>
+</html>
